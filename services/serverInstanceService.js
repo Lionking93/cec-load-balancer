@@ -1,30 +1,15 @@
+const exec = require('child_process').execSync
+
 function ServerInstance(containerName, port, nextServerInstance) {
   this.containerName = containerName
   this.port = port
   this.status = 'running'
-  this.requestsUntilNextPoll = 0
   this.nextServerInstance = nextServerInstance
-  this.numberOfUnsuccessfulPolls = 0
+}
 
-  this.resetServerInstanceProperties = () => {
-    this.numberOfUnsuccessfulPolls = 0
-    this.requestsUntilNextPoll = 0
-    this.status = 'running'
-  }
-
-  this.markServerInstanceAsUnavailable = () => {
-    this.status = 'unavailable'
-    this.requestsUntilNextPoll = 10 * this.numberOfUnsuccessfulPolls + 10
-    this.numberOfUnsuccessfulPolls += 1 
-  }
-
-  this.updatePollingStatus = () => {
-    if (this.requestsUntilNextPoll > 0)
-      this.requestsUntilNextPoll -= 1
-
-    if (this.requestsUntilNextPoll === 0)
-      this.status = 'running'
-  }
+const getActiveServerInstance = () => {
+  console.log('Retrieving active server instance. Got:', activeServerInstance)
+  return activeServerInstance
 }
 
 /**
@@ -32,51 +17,55 @@ function ServerInstance(containerName, port, nextServerInstance) {
  * @param {*} initialNumberOfServers 
  * @param {*} containerBaseName 
  */
-const formInitialListOfRunningServers = (initialNumberOfServers, containerBaseName, portBasePart) => {
-  const firstServerInstance = new ServerInstance(containerBaseName + '1', portBasePart + '1', null)
+const formInitialListOfRunningServers = (config) => {
+  const firstServerInstance = new ServerInstance(config.servers[0].containerName, config.servers[0].port, null)
   let currentServerInstance = firstServerInstance
 
-  for (let i = 2; i <= initialNumberOfServers; i++) {
-    let newServerInstance =  new ServerInstance(containerBaseName + i, portBasePart + i, null)
+  for (let i = 1; i < config.servers.length; i++) {
+    let newServerInstance =  new ServerInstance(config.servers[i].containerName, config.servers[i].port, null)
     currentServerInstance.nextServerInstance = newServerInstance
     currentServerInstance = newServerInstance
 
-    if (i == initialNumberOfServers) {
+    if (i === config.servers.length - 1) {
       currentServerInstance.nextServerInstance = firstServerInstance
     }
   }
 
-  return firstServerInstance
+  activeServerInstance = firstServerInstance
+  console.log('Server instances initialized. New active server instance: ', activeServerInstance)
 }
 
-const checkIfRunningServers = (activeServerInstance) => {
-  let currentServerInstance = activeServerInstance
-  
-  if (currentServerInstance.status === 'running') {
-    console.log('First server is active!')
+const checkIfServerInstanceIsActive = (serverInstance) => {
+  try {
+    exec(`ping -c 3 ${serverInstance.containerName}`)
+    console.log(`Server ${serverInstance.containerName} is active!`)
+    serverInstance.status = 'running'
     return true
-  } else if (currentServerInstance.status === 'unavailable') {
-    currentServerInstance.updatePollingStatus()
+  } catch (error) {
+    console.log(`Server ${serverInstance.containerName} is not active!`)
+    serverInstance.status = 'unavailable'
+    return false
   }
+}
+
+const checkIfActiveServerInstances = () => {
+  let currentServerInstance = activeServerInstance
+  let activeServerInstanceFound = checkIfServerInstanceIsActive(currentServerInstance)
 
   if (currentServerInstance.nextServerInstance !== null)
     currentServerInstance = currentServerInstance.nextServerInstance
 
   while (currentServerInstance != activeServerInstance) {
     console.log('Looking for active servers')
-    if (currentServerInstance.status === 'running') {
-      console.log('Found active server')
-      return true
-    } else if (currentServerInstance.status === 'unavailable') {
-      currentServerInstance.updatePollingStatus()
-    } 
+    if (checkIfServerInstanceIsActive(currentServerInstance))
+      activeServerInstanceFound = true
     currentServerInstance = currentServerInstance.nextServerInstance
   }
   console.log('No active servers found')
-  return false
+  return activeServerInstanceFound
 }
 
-const changeActiveServerInstance = (activeServerInstance) => {
+const changeActiveServerInstance = () => {
   let currentServerInstance = activeServerInstance.nextServerInstance !== null 
     ? activeServerInstance.nextServerInstance
     : activeServerInstance
@@ -89,12 +78,19 @@ const changeActiveServerInstance = (activeServerInstance) => {
     currentServerInstance = currentServerInstance.nextServerInstance
   }
 
-  console.log('Active server instance:', activeServerInstance)
+  console.log('Changed active serve instance. New active server instance:', activeServerInstance)
   return activeServerInstance
 }
 
-module.exports = {
-  formInitialListOfRunningServers,
-  changeActiveServerInstance,
-  checkIfRunningServers
+const serverInstanceService = () => {
+  let activeServerInstance = null
+
+  return {
+    getActiveServerInstance,
+    changeActiveServerInstance,
+    checkIfActiveServerInstances,
+    formInitialListOfRunningServers
+  }
 }
+
+module.exports = serverInstanceService()
